@@ -99,6 +99,4 @@ Files
 qos_controller.py → controller logic
 topology.py → custom topology
 README.md → documentation
-Author
 
-Akhilesh Kumar
