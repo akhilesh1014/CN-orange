@@ -64,35 +64,47 @@ h1 — s1 — s2 — s3 — h3
 ### 1. Activate virtual environment
 ```bash
 cd ~/CN
+
 source ryu-env/bin/activate
+
 2. Start controller
 python -m ryu.cmd.manager qos_controller.py
+
 3. Run Mininet (in new terminal)
 sudo mn --custom topology.py --topo customtopo --controller=remote
+
 4. Test connectivity
 pingall
+
 5. Start server
 h2 iperf -s &
 h2 iperf -u -s &
+
 6. Run tests
-
 UDP test:
-
 h1 iperf -u -c h2
 
 TCP test:
-
 h1 iperf -c h2
+
 Output
 Ping test shows 0% packet loss
 UDP traffic gets higher priority
 TCP traffic gets lower priority
 
 Flow rules can be checked using:
-
 sh ovs-ofctl dump-flows s1
-Conclusion
 
+Latency check
+UDP:
+h1 iperf -u -c h2 &
+h3 ping -c 5 h2
+
+TCP:
+h1 iperf -c h2 &
+h3 ping -c 5 h2
+
+Conclusion
 This project shows how SDN can be used to control network behavior. By assigning priorities using flow rules, we can manage traffic efficiently. It also demonstrates how flexible SDN is compared to traditional networking.
 
 Files
