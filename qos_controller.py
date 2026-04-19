@@ -71,7 +71,7 @@ class QoSController(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
-        # Install a flow rule only for IP traffic (not ARP)
+        # Install a flow rule only for IP traffic 
         if out_port != ofproto.OFPP_FLOOD:
             ip = pkt.get_protocol(ipv4.ipv4)
             if ip:
