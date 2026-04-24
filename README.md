@@ -1,114 +1,176 @@
-# SDN QoS Priority Controller
+# QoS Latency Experiment
 
-## Overview
-This project is about implementing a simple SDN controller using Ryu that prioritizes different types of network traffic. The controller gives higher priority to UDP traffic compared to TCP using OpenFlow rules.
-
----
-
-## Objective
-The goal is to:
-- Identify traffic types (UDP, TCP, etc.)
-- Assign higher priority to UDP
-- Assign lower priority to TCP
-- Install flow rules dynamically using SDN
+A Mininet + Ryu SDN experiment demonstrating how OVS queue-based QoS protects ICMP (ping) latency under TCP flood congestion.
 
 ---
 
-## Tools Used
-- Python 3.10
-- Ryu Controller
-- Mininet
-- Open vSwitch
-- OpenFlow 1.3
+## Architecture
+
+```
+h1 — s1 — s2 — s3 — h2
+               |
+              h3
+s3 — s4 — s5
+```
+
+- **Links:** 1 Mbps, 10ms delay each hop
+- **Queue 0 (HIGH):** ICMP + UDP → 950 Kbps guaranteed
+- **Queue 1 (LOW):** TCP flood → max 500 Kbps, no guarantees
 
 ---
 
-## Network Topology
-A custom topology is created using Mininet Python API.
+## Prerequisites
 
-It consists of:
-- 3 Hosts: h1, h2, h3  
-- 3 Switches: s1, s2, s3  
-
-Topology structure:
-
-h1 — s1 — s2 — s3 — h3  
-         |  
-        h2  
+- Mininet installed
+- Ryu SDN framework (`ryu-manager` available)
+- OVS (Open vSwitch) installed
+- `qos_controller.py` and `topology.py` in working directory
 
 ---
 
-## How it Works
-- When a packet arrives at the switch, it is sent to the controller (if no rule exists)
-- The controller checks the protocol:
-  - UDP → high priority (100)
-  - TCP → low priority (10)
-- Based on this, a flow rule is installed in the switch
-- Future packets are handled directly by the switch
+## Setup (run once at the start)
 
----
-
-## Flow Rules
-
-| Traffic | Protocol | Priority |
-|--------|----------|----------|
-| UDP    | 17       | 100      |
-| TCP    | 6        | 10       |
-| Others | Any      | 1        |
-| ARP    | —        | Flood    |
-
----
-
-## Steps to Run
-
-### 1. Activate virtual environment
+**Terminal 1 — Start Ryu controller**
 ```bash
-cd ~/CN
+ryu-manager qos_controller.py
+```
 
-source ryu-env/bin/activate
+**Terminal 2 — Start Mininet**
+```bash
+sudo mn -c && sudo mn --controller=remote --custom topology.py --topo=customtopo --link=tc --switch=ovsk,protocols=OpenFlow13
+```
 
-2. Start controller
-python -m ryu.cmd.manager qos_controller.py
+**Terminal 3 — Apply OVS queues on backbone ports**
+```bash
+sudo ovs-vsctl set port s1-eth2 qos=@q1 -- --id=@q1 create qos type=linux-htb queues:0=@hi1 queues:1=@lo1 -- --id=@hi1 create queue other-config:min-rate=950000 other-config:max-rate=1000000 -- --id=@lo1 create queue other-config:min-rate=10000 other-config:max-rate=500000
+```
+```bash
+sudo ovs-vsctl set port s2-eth1 qos=@q2 -- --id=@q2 create qos type=linux-htb queues:0=@hi2 queues:1=@lo2 -- --id=@hi2 create queue other-config:min-rate=950000 other-config:max-rate=1000000 -- --id=@lo2 create queue other-config:min-rate=10000 other-config:max-rate=500000
+```
+```bash
+sudo ovs-vsctl set port s2-eth2 qos=@q3 -- --id=@q3 create qos type=linux-htb queues:0=@hi3 queues:1=@lo3 -- --id=@hi3 create queue other-config:min-rate=950000 other-config:max-rate=1000000 -- --id=@lo3 create queue other-config:min-rate=10000 other-config:max-rate=500000
+```
+```bash
+sudo ovs-vsctl set port s3-eth1 qos=@q4 -- --id=@q4 create qos type=linux-htb queues:0=@hi4 queues:1=@lo4 -- --id=@hi4 create queue other-config:min-rate=950000 other-config:max-rate=1000000 -- --id=@lo4 create queue other-config:min-rate=10000 other-config:max-rate=500000
+```
+```bash
+sudo ovs-vsctl set port s3-eth2 qos=@q5 -- --id=@q5 create qos type=linux-htb queues:0=@hi5 queues:1=@lo5 -- --id=@hi5 create queue other-config:min-rate=950000 other-config:max-rate=1000000 -- --id=@lo5 create queue other-config:min-rate=10000 other-config:max-rate=500000
+```
 
-3. Run Mininet (in new terminal)
-sudo mn --custom topology.py --topo customtopo --controller=remote
+---
 
-4. Test connectivity
-pingall
+## Situation 1 — Baseline (No Congestion)
 
-5. Start server
+**Controller:** `qos_controller.py`
+
+Run inside Mininet CLI:
+```bash
+h1 ping -c 200 -i 0.1 h2
+```
+
+Note down `avg` and `max` from the ping summary. Then clean up:
+```bash
+exit
+sudo mn -c
+sudo ovs-vsctl --all destroy qos
+sudo ovs-vsctl --all destroy queue
+```
+
+**Expected:** ~40–50 ms avg (2 hops × 10ms delay + processing overhead)
+
+---
+
+## Situation 2 — QoS ON, Congested
+
+**Controller:** `qos_controller.py` (keep running from Terminal 1)
+
+**Terminal 2 — Restart Mininet**
+```bash
+sudo mn --controller=remote --custom topology.py --topo=customtopo --link=tc --switch=ovsk,protocols=OpenFlow13
+```
+
+**Terminal 3 — Re-apply queues** (same 5 commands as Setup above)
+
+**Mininet CLI — Start flood and record ping**
+```bash
 h2 iperf -s &
-h2 iperf -u -s &
+h3 iperf -c h2 -t 60 -P 20 &
+```
 
-6. Run tests
-UDP test:
-h1 iperf -u -c h2
+Wait 5 seconds for congestion to establish, then:
+```bash
+h1 ping -c 200 -i 0.1 h2
+```
 
-TCP test:
-h1 iperf -c h2
+Note down `avg` and `max`. Then clean up:
+```bash
+exit
+sudo mn -c
+sudo ovs-vsctl --all destroy qos
+sudo ovs-vsctl --all destroy queue
+```
 
-Output
-Ping test shows 0% packet loss
-UDP traffic gets higher priority
-TCP traffic gets lower priority
+**Expected:** avg close to Situation 1 — ICMP is in Queue 0, TCP flood is throttled in Queue 1
 
-Flow rules can be checked using:
-sh ovs-ofctl dump-flows s1
+---
 
-Latency check
-UDP:
-h1 iperf -u -c h2 &
-h3 ping -c 5 h2
+## Situation 3 — QoS OFF, Congested
 
-TCP:
-h1 iperf -c h2 &
-h3 ping -c 5 h2
+**Terminal 1 — Stop qos_controller (Ctrl+C), switch to simple switch**
+```bash
+ryu-manager ryu.app.simple_switch_13
+```
 
-Conclusion
-This project shows how SDN can be used to control network behavior. By assigning priorities using flow rules, we can manage traffic efficiently. It also demonstrates how flexible SDN is compared to traditional networking.
+**Terminal 2 — Restart Mininet**
+```bash
+sudo mn --controller=remote --custom topology.py --topo=customtopo --link=tc --switch=ovsk,protocols=OpenFlow13
+```
 
-Files
-qos_controller.py → controller logic
-topology.py → custom topology
-README.md → documentation
+**Terminal 3 — Re-apply queues** (same 5 commands as Setup above)
 
+**Mininet CLI — Start flood and record ping**
+```bash
+h2 iperf -s &
+h3 iperf -c h2 -t 60 -P 20 &
+```
+
+Wait 5 seconds, then:
+```bash
+h1 ping -c 200 -i 0.1 h2
+```
+
+Note down `avg` and `max`.
+
+**Expected:** avg clearly higher than Situation 2 — no queue separation, ICMP competes equally with TCP flood
+
+---
+
+## Cleanup
+
+```bash
+exit
+sudo mn -c
+sudo ovs-vsctl --all destroy qos
+sudo ovs-vsctl --all destroy queue
+```
+
+---
+
+## Expected Results
+
+| Situation | Condition | Expected avg latency |
+|-----------|-----------|----------------------|
+| S1 | Baseline, no congestion | ~45 ms |
+| S2 | QoS ON, TCP flood | ≈ S1 (protected) |
+| S3 | QoS OFF, TCP flood | S1 + 30–100 ms spike |
+
+**Conclusion:** S1 ≈ S2 << S3 — QoS controller successfully protects ICMP latency under congestion using 2-queue HTB scheduling.
+
+---
+
+## Queue Design
+
+| Queue | Traffic | Min rate | Max rate |
+|-------|---------|----------|----------|
+| 0 — HIGH | ICMP, UDP | 950 Kbps | 1 Mbps |
+| 1 — LOW  | TCP | 10 Kbps | 500 Kbps |
